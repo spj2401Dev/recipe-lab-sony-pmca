@@ -86,6 +86,15 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
     private SharedPreferences prefs;
     private MenuView menu;
     private boolean menuOpen = false;
+    // PERF: how fast each screen answers its keys, from a key's event time to the end of the draw it caused (TimedFrame).
+    // The key being dispatched (its event time, 0 outside one) and the screen it went to. A key that changed nothing is
+    // dropped once UNDRAWN_MS pass without a draw: a draw it asked for comes first, the frame being queued ahead of that
+    // (or holding the thread until it is done)
+    private static final long UNDRAWN_MS = 50;
+    private final CardLog.Perf perf = new CardLog.Perf();
+    private long keyNow = 0;
+    private int keyNowScreen = CardLog.Perf.NONE;
+    private final Runnable dropUndrawn = new Runnable() { public void run() { perf.drop(); } };
     private int menuLevel = DevTools.LEVEL_APP, menuPage = PAGE_ROWS;   // which menu, and whether it shows rows or a read-only page
     private int menuSel = 0, settleIdx = DevTools.SETTLE_DEFAULT;   // menu: highlighted row · developer menu: chosen settle delay
     private int langChoice = Lang.AUTO;                         // the Language row: Lang.AUTO or a language
@@ -94,7 +103,6 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
     private boolean transferSync;                               // the page was opened as Sync recipes: same link, its own words
     private Keys.Caps caps = Keys.Caps.UNKNOWN;                 // the shortcut keys this body reports (KeyProbe)
     private HintBar hints;
-    private SponsorLine sponsor;
     private LinearLayout chips;
     private final TextView[] chipLabel = new TextView[N], chipValue = new TextView[N];
     private final View[] chip = new View[N];
@@ -168,11 +176,11 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
         count = (TextView) findViewById(R.id.count);
         meta = (TextView) findViewById(R.id.meta);
         hints = (HintBar) findViewById(R.id.hints);
-        sponsor = (SponsorLine) findViewById(R.id.sponsor);
         mini = (TextView) findViewById(R.id.mini);
         toast = (TextView) findViewById(R.id.toast);
         prompt = (PromptView) findViewById(R.id.prompt);
         menu = (MenuView) findViewById(R.id.menu);
+        ((TimedFrame) findViewById(R.id.root)).setListener(new TimedFrame.Listener() { public void drawn(long start, long end) { keyDrawn(start, end); } });
         keyboard = (KeyboardView) findViewById(R.id.keyboard);
         chips = (LinearLayout) findViewById(R.id.chips);
         buildChips();
@@ -310,7 +318,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
         Lang.use(Lang.resolve(langChoice, l == null ? null : l.getLanguage(), l == null ? null : l.getCountry()));
         Typeface tf = UiFont.of(this, Lang.current());
         UiFont.apply(findViewById(android.R.id.content), tf);
-        picker.setTypeface(tf); prompt.setTypeface(tf); menu.setTypeface(tf); hints.setTypeface(tf); keyboard.setTypeface(tf); sponsor.setTypeface(tf);
+        picker.setTypeface(tf); prompt.setTypeface(tf); menu.setTypeface(tf); hints.setTypeface(tf); keyboard.setTypeface(tf);
     }
 
     @Override
@@ -347,6 +355,8 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
         stopTransfer();                                          // leaving the app stops Transfer to phone: hotspot off, auto power-off back
         closeMenu();
         closeName();
+        logTiming(CardLog.Perf.PANEL); logTiming(CardLog.Perf.BROWSER);   // the menu's went when it closed
+        perf.drop(); handler.removeCallbacks(dropUndrawn);
         if (promptOpen && promptKind >= P_DISCARD) { closePrompt(); afterDiscard = null; }   // about this recipe: the card is read again on the way back
         stopLogger();
         handler.removeCallbacks(hideToast);
@@ -663,6 +673,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
     private void openMenu(int level) {
         if (running) return;
         menuOpen = true; menuLevel = level; menuPage = PAGE_ROWS; menuSel = 0; renderMenu();
+        render();                                                // the views under it come down while it is up
     }
 
     private void renderMenu() {
@@ -685,10 +696,19 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
             int legend = app ? (value ? Keys.H_MENU_TOP_VALUE : Keys.H_MENU_TOP) : (value ? Keys.H_MENU_SUB_VALUE : Keys.H_MENU_SUB);
             menu.set(app ? DevTools.APP_TITLE : DevTools.title(), labels, details, values, faces, DevTools.icons(menuLevel), menuSel, Keys.hints(legend, caps));
         }
+        keyChanged();
         menu.setVisibility(View.VISIBLE);
     }
 
-    private void closeMenu() { menu.setVisibility(View.GONE); menuOpen = false; }
+    private void closeMenu() {
+        boolean was = menuOpen;
+        menu.setVisibility(View.GONE); menuOpen = false;
+        if (!was) return;
+        logTiming(CardLog.Perf.MENU);                            // one line per opening of the menu
+        perf.drop(CardLog.Perf.MENU);                            // the key that closed it, and any not drawn yet, count for no opening
+        keyNowScreen = CardLog.Perf.NONE;
+        render();                                                // the views it hid come back
+    }
 
     /** the installed version, from the package — never a string in this file (tools/check-version.sh) */
     private String versionName() {
@@ -733,11 +753,11 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
         if (menuLevel == DevTools.LEVEL_APP && menuSel == DevTools.APP_PANEL) overlay = DevTools.nextPanel(overlay, dir);
         else if (menuLevel == DevTools.LEVEL_APP && menuSel == DevTools.APP_LANG) {
             langChoice = Lang.nextChoice(langChoice, dir);
-            prefs.edit().putString("language", Lang.choiceCode(langChoice)).commit();
+            prefs.edit().putString("language", Lang.choiceCode(langChoice)).apply();   // written in the background: commit() holds the key up on flash
             applyLanguage();                                     // the menu redraws in it straight away, the panel under it too
         } else if (menuLevel == DevTools.LEVEL_DEV && menuSel == DevTools.ROW_SETTLE) {
             settleIdx = DevTools.nextSettle(settleIdx, dir);
-            prefs.edit().putInt("settle", settleIdx).commit();
+            prefs.edit().putInt("settle", settleIdx).apply();
         } else return false;
         renderMenu(); render();
         return true;
@@ -1002,6 +1022,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
                 : NameEntry.blank(purpose == NAME_COPY ? CustomRecipes.copyName(library.get(recipe).name, library.customNames()) : CustomRecipes.defaultName(library.customNames()));
         nameOpen = true;
         renderName();
+        render();                                                // the views under it come down while it is up
     }
 
     private void renderName() {
@@ -1010,7 +1031,12 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
         keyboard.setVisibility(View.VISIBLE);
     }
 
-    private void closeName() { if (keyboard != null) keyboard.setVisibility(View.GONE); nameOpen = false; }
+    private void closeName() {
+        boolean was = nameOpen;
+        if (keyboard != null) keyboard.setVisibility(View.GONE);
+        nameOpen = false;
+        if (was) render();                                       // the views it hid come back
+    }
 
     /** keys while the name editor is up: the four-way and the dials move, centre types, trash deletes, MENU cancels */
     private boolean nameKey(int sc) {
@@ -1241,13 +1267,16 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
     private static void setBgIf(View v, int[] has, int i, int res) { if (has[i] != res) { v.setBackgroundResource(res); has[i] = res; } }
 
     private void render() {
+        keyChanged();
         Recipes.Recipe r = library.get(recipe);
         boolean dirty = dirty();
         String pos = library.position(recipe);
         String grp = Recipes.groupLabel(r.group).toUpperCase();
+        if (menuOpen || nameOpen) {                              // a full-screen view is up: nothing under it is drawn, or redrawn on every key
+            panel.setVisibility(View.GONE); mini.setVisibility(View.GONE); picker.setVisibility(View.GONE);
+            return;
+        }
         picker.setVisibility(overlay == OV_BROWSER ? View.VISIBLE : View.GONE);
-        sponsor.setText(DevTools.sponsorLine());                     // the README's ask, small, over the live view
-        sponsor.setVisibility(panelUp(overlay) ? View.VISIBLE : View.GONE);   // Full and No keys; Label and Hidden hide it
         if (overlay == OV_BROWSER) { panel.setVisibility(View.GONE); mini.setVisibility(View.GONE); picker.set(recipe, browserCol, browserGroup, favs, library, cardDir != null); return; }
         if (panelUp(overlay)) {
             panel.setVisibility(View.VISIBLE); mini.setVisibility(View.GONE);
@@ -1289,7 +1318,8 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
                 setColorIf(chipValue[i], foc ? INK : ch ? ACCENT : WHITE);
                 setTextIf(chipValue[i], Params.fmt(i, edit[i], edit));
             }
-            if (row == 0) chipScroll.post(new Runnable() { public void run() { chipScroll.smoothScrollTo(0, 0); } });
+            // only when it has somewhere to go: a smooth scroll redraws the chips for its whole run even when it moves nothing
+            if (row == 0) chipScroll.post(new Runnable() { public void run() { if (chipScroll.getScrollX() != 0) chipScroll.smoothScrollTo(0, 0); } });
             else {
                 final View c = chip[row];
                 chipScroll.post(new Runnable() { public void run() {
@@ -1436,10 +1466,35 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
     /** handle keys before any focusable view (the chip scroller would otherwise eat LEFT/RIGHT) */
     @Override
     public boolean dispatchKeyEvent(KeyEvent e) {
-        if (e.getAction() == KeyEvent.ACTION_DOWN) return onKeyDown(e.getKeyCode(), e);
-        if (e.getAction() == KeyEvent.ACTION_UP) return onKeyUp(e.getKeyCode(), e);
-        return super.dispatchKeyEvent(e);
+        keyNow = e.getEventTime(); keyNowScreen = timedScreen();
+        try {
+            if (e.getAction() == KeyEvent.ACTION_DOWN) return onKeyDown(e.getKeyCode(), e);
+            if (e.getAction() == KeyEvent.ACTION_UP) return onKeyUp(e.getKeyCode(), e);
+            return super.dispatchKeyEvent(e);
+        } finally { keyNow = 0; }
     }
+
+    // ------------------------------------------------------------ PERF: key to drawn, per screen
+    /** the screen a key goes to, as PERF names it; NONE for those not timed (a question, the name editor, a run, Transfer) */
+    private int timedScreen() {
+        if (menuOpen) return menuPage == PAGE_TRANSFER ? CardLog.Perf.NONE : CardLog.Perf.MENU;
+        if (running || logging || promptOpen || nameOpen) return CardLog.Perf.NONE;
+        if (overlay == OV_BROWSER) return CardLog.Perf.BROWSER;
+        return panelUp(overlay) ? CardLog.Perf.PANEL : CardLog.Perf.NONE;
+    }
+
+    /** the key being dispatched is changing what is shown: its draw is timed, unless nothing turns out to need drawing */
+    private void keyChanged() {
+        if (!perf.changed(keyNow, keyNowScreen)) return;
+        handler.removeCallbacks(dropUndrawn);
+        handler.postDelayed(dropUndrawn, UNDRAWN_MS);
+    }
+
+    /** the tree was drawn: the key waiting on it, if any, is a sample of its screen */
+    private void keyDrawn(long start, long end) { perf.drawn(start, end); handler.removeCallbacks(dropUndrawn); }
+
+    /** a screen's PERF line, when it has samples */
+    private void logTiming(int screen) { String line = perf.take(screen); if (line != null) log(CardLog.PERF, line); }
 
     /** whether a hold on the centre button marks a favourite where the user is now */
     private boolean holdMarksFavourite() { return Params.holdMarksFavourite(overlay, row, browserCol); }

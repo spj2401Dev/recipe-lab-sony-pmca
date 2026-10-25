@@ -5,6 +5,7 @@ import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.RectF;
 import android.graphics.Typeface;
+import java.util.Arrays;
 
 /**
  * Key legend drawn with Canvas (camera firmware font has no arrow / symbol glyphs).
@@ -31,7 +32,7 @@ public class Legend {
     }
 
     /** the labels' typeface: the display language's ({@link UiFont}); the key caps keep the camera's */
-    public void setTypeface(Typeface tf) { text.setTypeface(tf); }
+    public void setTypeface(Typeface tf) { text.setTypeface(tf); laid = null; }   // other glyphs, other widths
 
     private static final Path STAR = new Path();
 
@@ -73,7 +74,7 @@ public class Legend {
     private static final float LINE_STEP = 18, WRAP_GAP = 8;
 
     /** how many lines a row needs in {@code width} at full size */
-    public int lines(float width, Keys.Hints h) { return lineCounts(width, h).length; }
+    public int lines(float width, Keys.Hints h) { layout(width, h); return laidCounts.length; }
 
     private int[] lineCounts(float width, Keys.Hints h) {
         setScale(1f);
@@ -83,17 +84,39 @@ public class Legend {
         return Keys.lineCounts(w, width, gap);
     }
 
-    /** draws a legend row from {@code top}, wrapped onto as many lines as it needs; returns the height used */
-    public float drawWrapped(Canvas c, float x, float top, float width, Keys.Hints h) {
+    // the last row laid out: its lines, each line's scale and every item's key and label offset. A view redraws the same
+    // legend on every key press (and asks lines() before drawing it), so a row equal to the last one measures nothing
+    private Keys.Hints laid;
+    private float laidWidth;
+    private int[] laidCounts;
+    private float[] laidScale, laidKeyX, laidTextX;
+
+    private void layout(float width, Keys.Hints h) {
+        if (laid != null && width == laidWidth && same(h, laid)) return;
         int[] counts = lineCounts(width, h);
-        float cy = top + height() / 2;
-        for (int line = 0, at = 0; line < counts.length; at += counts[line], line++, cy += LINE_STEP * d) {
+        float[] scale = new float[counts.length], keyX = new float[h.icons.length], textX = new float[h.icons.length];
+        for (int line = 0, at = 0; line < counts.length; at += counts[line], line++) {
             int n = counts[line];
             int[] icons = new int[n], alts = new int[n]; String[] labels = new String[n];
             System.arraycopy(h.icons, at, icons, 0, n); System.arraycopy(h.alts, at, alts, 0, n); System.arraycopy(h.labels, at, labels, 0, n);
-            draw(c, x, cy, width, icons, alts, labels);
+            float[] kx = new float[n], tx = new float[n];
+            scale[line] = place(width, icons, alts, labels, kx, tx);
+            System.arraycopy(kx, 0, keyX, at, n); System.arraycopy(tx, 0, textX, at, n);
         }
-        return height(counts.length);
+        laid = h; laidWidth = width; laidCounts = counts; laidScale = scale; laidKeyX = keyX; laidTextX = textX;
+    }
+
+    private static boolean same(Keys.Hints a, Keys.Hints b) {
+        return a == b || Arrays.equals(a.icons, b.icons) && Arrays.equals(a.alts, b.alts) && Arrays.equals(a.labels, b.labels);
+    }
+
+    /** draws a legend row from {@code top}, wrapped onto as many lines as it needs; returns the height used */
+    public float drawWrapped(Canvas c, float x, float top, float width, Keys.Hints h) {
+        layout(width, h);
+        float cy = top + height() / 2;
+        for (int line = 0, at = 0; line < laidCounts.length; at += laidCounts[line], line++, cy += LINE_STEP * d)
+            paint(c, x, cy, laidScale[line], h.icons, h.alts, h.labels, at, laidCounts[line], laidKeyX, laidTextX);
+        return height(laidCounts.length);
     }
 
     /** draws a legend row built by {@link Keys#hints}: a shortcut icon, where there is one, goes before its key as "Fn / MENU" */
@@ -103,6 +126,18 @@ public class Legend {
     public float draw(Canvas c, float x, float cy, float width, int[] icons, String[] labels) { return draw(c, x, cy, width, icons, null, labels); }
 
     private float draw(Canvas c, float x, float cy, float width, int[] icons, int[] alts, String[] labels) {
+        int n = icons.length;
+        float[] keyX = new float[n], textX = new float[n];
+        float scale = place(width, icons, alts, labels, keyX, textX);
+        paint(c, x, cy, scale, icons, alts, labels, 0, n, keyX, textX);
+        return n == 0 ? 0 : textX[n - 1] + text.measureText(labels[n - 1]);
+    }
+
+    /**
+     * One line of items fitted to {@code width}: shrunk when it does not fit, the gaps between items squeezed or opened
+     * up. Fills where each item's key and label start from the line's left edge, and returns the scale.
+     */
+    private float place(float width, int[] icons, int[] alts, String[] labels, float[] keyX, float[] textX) {
         float scale = 1f, gap = 14 * d, minGap = 5 * d;
         float need = measure(scale, minGap, icons, alts, labels);
         if (need > width) scale = Math.max(0.6f, width / need);          // shrink everything, gaps stay minimal
@@ -110,13 +145,24 @@ public class Legend {
         if (used < width) gap = Math.min(14 * d, minGap + (width - used) / Math.max(1, icons.length - 1));
         else gap = minGap;
         setScale(scale);
-        float s = 6 * d * scale, ty = cy - (text.ascent() + text.descent()) / 2f, x0 = x;
+        float s = 6 * d * scale, x = 0;
         for (int i = 0; i < icons.length; i++) {
-            x += keys(c, icons[i], alts == null ? Keys.I_NONE : alts[i], x, cy, s, ty, scale) + 4 * d * scale;
-            c.drawText(labels[i], x, ty, text);
+            keyX[i] = x;
+            x += keys(nowhere, icons[i], alts == null ? Keys.I_NONE : alts[i], 0, 0, s, 0, scale) + 4 * d * scale;
+            textX[i] = x;
             x += text.measureText(labels[i]) + (i < icons.length - 1 ? gap : 0);
         }
-        return x - x0;
+        return scale;
+    }
+
+    /** items {@code from} to {@code from + n} at the offsets {@link #place} gave them, from x, centred on cy */
+    private void paint(Canvas c, float x, float cy, float scale, int[] icons, int[] alts, String[] labels, int from, int n, float[] keyX, float[] textX) {
+        setScale(scale);
+        float s = 6 * d * scale, ty = cy - (text.ascent() + text.descent()) / 2f;
+        for (int i = from; i < from + n; i++) {
+            keys(c, icons[i], alts == null ? Keys.I_NONE : alts[i], x + keyX[i], cy, s, ty, scale);
+            c.drawText(labels[i], x + textX[i], ty, text);
+        }
     }
 
     private float measure(float scale, float gap, int[] icons, int[] alts, String[] labels) {

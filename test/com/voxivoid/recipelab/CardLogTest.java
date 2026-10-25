@@ -187,6 +187,56 @@ class CardLogTest {
         assertEquals("", CardLog.tail(null, new File(dir, "NONE.TXT"), 10));
     }
 
+    @Test void timingSumsDrawsIntoOneLine() {
+        CardLog.Timing t = new CardLog.Timing();
+        assertTrue(t.empty());
+        t.add(40, 10); t.add(130, 35); t.add(21, 12);
+        assertFalse(t.empty());
+        assertEquals("menu: 3 draws  ·  key to drawn avg 64 ms, max 130 ms  ·  draw avg 19 ms, max 35 ms", t.line("menu"));
+        t.reset();
+        assertTrue(t.empty());
+        t.add(7, 3);
+        assertEquals("menu: 1 draw  ·  key to drawn avg 7 ms, max 7 ms  ·  draw avg 3 ms, max 3 ms", t.line("menu"));   // nothing left from before the reset
+    }
+
+    @Test void perfTimesAKeyToTheNextDrawOfItsScreen() {
+        CardLog.Perf p = new CardLog.Perf();
+        assertTrue(p.changed(1000, CardLog.Perf.PANEL));
+        p.drawn(1030, 1040);                                    // queued 30 ms, drawn in 10
+        p.drawn(2000, 2005);                                    // a draw no key asked for: no sample
+        assertEquals("panel: 1 draw  ·  key to drawn avg 40 ms, max 40 ms  ·  draw avg 10 ms, max 10 ms", p.take(CardLog.Perf.PANEL));
+        assertNull(p.take(CardLog.Perf.PANEL));                 // taken: a fresh start
+        assertNull(p.take(CardLog.Perf.MENU));
+    }
+
+    @Test void perfTimesKeysThatQueuedUpFromTheOldest() {
+        CardLog.Perf p = new CardLog.Perf();
+        p.changed(1000, CardLog.Perf.BROWSER);
+        p.changed(1020, CardLog.Perf.BROWSER);
+        p.drawn(1050, 1100);
+        assertEquals("browser: 1 draw  ·  key to drawn avg 100 ms, max 100 ms  ·  draw avg 50 ms, max 50 ms", p.take(CardLog.Perf.BROWSER));
+    }
+
+    @Test void perfLeavesOutKeysThatAreNotTimedOrDrewNothing() {
+        CardLog.Perf p = new CardLog.Perf();
+        assertFalse(p.changed(1000, CardLog.Perf.NONE));         // a question, the name editor, Transfer: not timed
+        assertFalse(p.changed(0, CardLog.Perf.PANEL));           // not during a key
+        p.drawn(1010, 1020);
+        assertNull(p.take(CardLog.Perf.PANEL));
+        p.changed(2000, CardLog.Perf.PANEL);
+        p.drop();                                               // it changed nothing: no draw came
+        p.drawn(5000, 5010);
+        assertNull(p.take(CardLog.Perf.PANEL));
+        p.changed(6000, CardLog.Perf.MENU);
+        p.drop(CardLog.Perf.PANEL);                             // another screen went: the menu's key is kept
+        p.drawn(6010, 6020);
+        assertNotNull(p.take(CardLog.Perf.MENU));
+        p.changed(7000, CardLog.Perf.MENU);
+        p.drop(CardLog.Perf.MENU);                              // the menu closed: its key is gone
+        p.drawn(7010, 7020);
+        assertNull(p.take(CardLog.Perf.MENU));
+    }
+
     @Test void aStackHasTheExceptionAndWhereItCameFrom() {
         String s = CardLog.stack(new IllegalStateException("boom"));
         assertTrue(s.startsWith("java.lang.IllegalStateException: boom"), s);
