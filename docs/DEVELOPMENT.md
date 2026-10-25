@@ -71,8 +71,6 @@ src/com/voxivoid/recipelab/
                                a hold is its key's icon labelled "(hold)", and Fn, where the body has it, sits before
                                MENU when both close the list ("Fn / MENU close")
   StarView.java                the star next to the recipe name when it is a favourite
-  SponsorLine.java             the small "Love this app? Leave a tip!" line, with a drawn heart, at the top of
-                               the live view on the Full and No keys panels (DevTools.sponsorLine, Ko-fi); the About page lists Ko-fi and GitHub Sponsors
   HintBar.java                 legend view under the panel (uses Legend)
   NativeBackup.java            JNI: read / write / attr / sync
   transfer/                    Transfer to phone (see Transfer to phone): the camera hotspot and the protocol 4 HTTP
@@ -175,6 +173,7 @@ tools' `DIFF.TXT`, `KEYS.TXT` and `LOCKS.TXT` — while `samples.txt` and `snaps
 | `PREVIEW` | autofocus refused, the camera not opening, the preview not starting, `setParameters` throwing — and the preview values the camera did not keep, read back after each `setParameters` (`color-mode mono>standard`), since a dropped value throws nothing (#104). Logged once per change, not per key press |
 | `SHOOT` | before every `takePicture`, the shutter key's and the sample run's: on a body that reboots on the shutter (#100) the last line is the frame that did it |
 | `CRASH` | the default uncaught-exception handler: the stack, then the platform's own handler |
+| `PERF` | how fast a screen answered its keys (`CardLog.Perf`, a `CardLog.Timing` per screen): `menu` when the app menu closes (one line per opening), `panel` and `browser` when the app is left (`onPause`). Each counts the draws a key caused, the time from the key's event time to the end of that draw (time queued included), and the draw alone, average and worst. The draw is timed at the layout's root (`TimedFrame`), so it is the whole tree, and it ends where the app's drawing does: putting the frame on the display comes after. A key that changed nothing on screen is dropped after 50 ms without a draw. Keys on a question, the name editor, Transfer to phone and a sample run are not timed. One line per screen, not per key, so measuring costs one card write |
 
 Times are the camera's clock, read from Sony's `TimeUtil` (the Android clock is never set: an A6000 log read 1970). Each line is opened, written and closed on its own, so a reboot loses at most the line being written. Past
 `CardLog.MAX_BYTES` (64 KB) any of them becomes its older file (`LOG1.TXT`, `KEYS1.TXT`, …), replacing the one before.

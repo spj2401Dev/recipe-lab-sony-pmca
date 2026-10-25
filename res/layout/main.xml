@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<!-- the root says when it has drawn: the PERF lines in LOG.TXT time keys to it (TimedFrame) -->
+<com.voxivoid.recipelab.TimedFrame xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/root"
     android:layout_width="fill_parent"
     android:layout_height="fill_parent">
 
@@ -7,16 +9,6 @@
         android:id="@+id/surface"
         android:layout_width="fill_parent"
         android:layout_height="fill_parent" />
-
-    <!-- the sponsor ask, small, at the top of the live view on the Full and No keys panels -->
-    <com.voxivoid.recipelab.SponsorLine
-        android:id="@+id/sponsor"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_gravity="top|left"
-        android:layout_marginLeft="8dp"
-        android:layout_marginTop="6dp"
-        android:visibility="gone" />
 
     <!-- full overlay: bottom panel -->
     <LinearLayout
@@ -211,4 +203,4 @@
         android:textColor="#FFFFFFFF"
         android:background="@drawable/toast_bg"
         android:visibility="gone" />
-</FrameLayout>
+</com.voxivoid.recipelab.TimedFrame>

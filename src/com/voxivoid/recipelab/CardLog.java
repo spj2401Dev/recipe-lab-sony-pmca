@@ -40,7 +40,78 @@ final class CardLog {
     static final int MAX_BYTES = 64 * 1024;
 
     /** the kinds of line, padded so the messages line up */
-    static final String OPEN = "OPEN", STATE = "STATE", WRITE = "WRITE", FAIL = "FAIL", PREVIEW = "PREVIEW", SHOOT = "SHOOT", CRASH = "CRASH", INFO = "INFO";
+    static final String OPEN = "OPEN", STATE = "STATE", WRITE = "WRITE", FAIL = "FAIL", PREVIEW = "PREVIEW", SHOOT = "SHOOT", CRASH = "CRASH", INFO = "INFO", PERF = "PERF";
+
+    /**
+     * How fast a screen answered its keys, summed while it is open and written as one {@link #PERF} line when it
+     * closes: a line per key would be a card write per key, slowing the very thing measured. Each sample is one draw a
+     * key caused, in ms: from the key's event time to the end of the draw (time spent queued included), and the draw alone.
+     */
+    static final class Timing {
+        private int draws;
+        private long keySum, keyMax, drawSum, drawMax;
+
+        void add(long keyToDrawn, long draw) {
+            draws++;
+            keySum += keyToDrawn; keyMax = Math.max(keyMax, keyToDrawn);
+            drawSum += draw; drawMax = Math.max(drawMax, draw);
+        }
+
+        boolean empty() { return draws == 0; }
+
+        void reset() { draws = 0; keySum = keyMax = drawSum = drawMax = 0; }
+
+        /** {@code menu: 12 draws  ·  key to drawn avg 41 ms, max 130 ms  ·  draw avg 18 ms, max 35 ms} */
+        String line(String what) {
+            return what + ": " + draws + (draws == 1 ? " draw" : " draws")
+                    + "  ·  key to drawn avg " + avg(keySum) + " ms, max " + keyMax + " ms"
+                    + "  ·  draw avg " + avg(drawSum) + " ms, max " + drawMax + " ms";
+        }
+
+        private long avg(long sum) { return draws == 0 ? 0 : (sum + draws / 2) / draws; }
+    }
+
+    /**
+     * Keys timed to the draw they caused, a {@link Timing} per screen. A key that changes what is shown is held, with its
+     * screen, until the next draw; keys that queue up meanwhile are timed from the oldest. One that changed nothing is
+     * {@link #drop dropped} by the caller once no draw came.
+     */
+    static final class Perf {
+        static final int PANEL = 0, BROWSER = 1, MENU = 2, NONE = -1;
+        private static final String[] NAME = { "panel", "browser", "menu" };
+        private final Timing[] timing = { new Timing(), new Timing(), new Timing() };
+        private long at = 0;                                      // the event time of the oldest key not drawn yet; 0 for none
+        private int screen = NONE;
+
+        /** a key sent at {@code eventTime} to {@code s} changed what is shown; false when it is not timed (NONE, or no key) */
+        boolean changed(long eventTime, int s) {
+            if (s == NONE || eventTime == 0) return false;
+            if (at == 0) { at = eventTime; screen = s; }
+            return true;
+        }
+
+        /** the screen was drawn from {@code start} to {@code end}: the key waiting on it, if any, is a sample */
+        void drawn(long start, long end) {
+            if (at == 0) return;
+            timing[screen].add(end - at, end - start);
+            at = 0;
+        }
+
+        /** the key waiting is not drawn after all: it changed nothing */
+        void drop() { at = 0; }
+
+        /** the key waiting, when it is {@code s}'s: that screen went */
+        void drop(int s) { if (screen == s) at = 0; }
+
+        /** {@code s}'s PERF line and a fresh start; null when it has no samples */
+        String take(int s) {
+            Timing t = timing[s];
+            if (t.empty()) return null;
+            String line = t.line(NAME[s]);
+            t.reset();
+            return line;
+        }
+    }
 
     /** the logs folder under a card root; null without a card */
     static File dir(File cardRoot) { return cardRoot == null ? null : new File(new File(cardRoot, DIR), SUB); }

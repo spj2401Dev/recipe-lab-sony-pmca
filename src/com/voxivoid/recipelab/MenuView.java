@@ -50,7 +50,7 @@ public class MenuView extends View {
         super(c, a);
         d = c.getResources().getDisplayMetrics().density;
         legend = new Legend(d);
-        bg.setColor(0xF0101010);
+        bg.setColor(0xFF101010);                                   // opaque: see isOpaque
         head.setColor(ACCENT); head.setTextSize(9 * d); head.setFakeBoldText(true);
         item.setTextSize(13 * d); item.setFakeBoldText(true);
         small.setTextSize(10 * d);
@@ -87,7 +87,7 @@ public class MenuView extends View {
         this.icons = icons; footer = null; transfer = null;
         this.values = values != null ? values : new String[labels.length];
         this.valueFaces = valueFaces != null ? valueFaces : new Typeface[labels.length];
-        requestLayout(); invalidate();
+        invalidate();                                              // no requestLayout: the size never depends on the rows
     }
 
     /** a read-only page: one {name, value} line each */
@@ -98,7 +98,7 @@ public class MenuView extends View {
         this.title = title; this.hints = hints; page = true; selected = -1; this.footer = footer; transfer = null;
         labels = new String[lines.length]; details = new String[lines.length]; values = new String[lines.length]; valueFaces = new Typeface[lines.length];
         for (int i = 0; i < lines.length; i++) { labels[i] = lines[i][0]; details[i] = lines[i][1]; }
-        requestLayout(); invalidate();
+        invalidate();
     }
 
     /** the Transfer to phone page, drawn on its own layout */
@@ -115,6 +115,10 @@ public class MenuView extends View {
 
     @Override
     protected void onMeasure(int w, int hh) { setMeasuredDimension(MeasureSpec.getSize(w), MeasureSpec.getSize(hh)); }
+
+    /** every pixel is painted ({@link #bg} is opaque): what is behind it need not be drawn first */
+    @Override
+    public boolean isOpaque() { return true; }
 
     @Override
     protected void onDraw(Canvas c) {

@@ -254,7 +254,6 @@ class DevToolsTest {
         assertEquals("Love this app? Leave a tip!", f[0], "the README's ask");
         assertEquals("ko-fi.com/voxivoid", f[1], "Ko-fi first: no GitHub account needed");
         assertEquals("github.com/sponsors/voxivoid", f[2]);
-        assertEquals("Love this app? Leave a tip!  ko-fi.com/voxivoid", DevTools.sponsorLine(), "the live view's line");
         assertEquals("ILCE-6000", DevTools.about(null, "ILCE-6000", null, "2.4")[1][1]);
     }
 
