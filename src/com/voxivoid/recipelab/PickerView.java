@@ -37,7 +37,7 @@ public class PickerView extends View {
         super(c, a);
         d = c.getResources().getDisplayMetrics().density;
         legend = new Legend(d);
-        bg.setColor(0xF0101010);
+        bg.setColor(0xFF101010);                                   // opaque: see isOpaque
         edge.setColor(0x66F2B85C); edge.setStyle(Paint.Style.STROKE); edge.setStrokeWidth(d);
         sel.setColor(ACCENT);
         outline.setColor(ACCENT); outline.setStyle(Paint.Style.STROKE); outline.setStrokeWidth(1.5f * d);
@@ -61,6 +61,10 @@ public class PickerView extends View {
     public void set(int recipe, int col, int grp, List<Integer> favourites, Library library, boolean cardIn) {
         selected = recipe; column = col; group = grp; favs = favourites; lib = library; card = cardIn; invalidate();
     }
+
+    /** every pixel is painted ({@link #bg} is opaque): what is behind it need not be drawn first */
+    @Override
+    public boolean isOpaque() { return true; }
 
     @Override
     protected void onDraw(Canvas c) {

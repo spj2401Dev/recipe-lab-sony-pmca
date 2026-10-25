@@ -152,9 +152,6 @@ final class DevTools {
         return new String[] { Lang.t("about_love"), SPONSOR_URL, "github.com/sponsors/voxivoid" };
     }
 
-    /** the line at the top of the live view, after its drawn heart: the ask and where to give */
-    static String sponsorLine() { return Lang.t("about_love") + "  " + SPONSOR_URL; }
-
     /** where the sponsor ask sends people: Ko-fi, which needs no account anywhere */
     static final String SPONSOR_URL = "ko-fi.com/voxivoid";
 

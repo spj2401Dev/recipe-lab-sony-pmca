@@ -33,7 +33,7 @@ public class KeyboardView extends View {
         super(c, a);
         d = c.getResources().getDisplayMetrics().density;
         legend = new Legend(d);
-        bg.setColor(0xF0101010);
+        bg.setColor(0xFF101010);                                   // opaque: see isOpaque
         head.setColor(ACCENT); head.setTextSize(9 * d); head.setFakeBoldText(true);
         field.setTextSize(17 * d); field.setFakeBoldText(true);
         box.setColor(ACCENT); box.setStyle(Paint.Style.STROKE); box.setStrokeWidth(1.5f * d);
@@ -53,6 +53,10 @@ public class KeyboardView extends View {
 
     @Override
     protected void onMeasure(int w, int hh) { setMeasuredDimension(MeasureSpec.getSize(w), MeasureSpec.getSize(hh)); }
+
+    /** every pixel is painted ({@link #bg} is opaque): what is behind it need not be drawn first */
+    @Override
+    public boolean isOpaque() { return true; }
 
     @Override
     protected void onDraw(Canvas c) {

@@ -9,3 +9,4 @@ debug.keystore
 jni/platform/errno.h.updater_only
 .idea/
 *.iml
+.vs/
