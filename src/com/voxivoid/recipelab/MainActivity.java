@@ -8,6 +8,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
+import android.os.SystemClock;
 import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.SurfaceHolder;
@@ -133,6 +134,13 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
     private int lastChip = 0;                         // chip to return to when leaving the recipe line
     private final int[] cur = new int[N], edit = new int[N];
     private boolean previewOk = false;
+    // live preview is three calls into the camera (get, set, get): turning fast would queue them up, so only the first
+    // turn after a pause is applied at once and the rest wait for the wheel to rest, at most PREVIEW_MAX_MS
+    private static final long PREVIEW_GAP_MS = 120, PREVIEW_MAX_MS = 400;
+    private boolean previewPending = false;
+    private long lastPreviewAt = 0, pendingSince = 0;
+    private final int[] chipBgRes = new int[N], actionBgRes = new int[4], badgeBgRes = new int[1];   // the background each has now (0: none yet)
+    private final Runnable previewRun = new Runnable() { public void run() { flushPreview(); } };
     private String previewErr = "";
     // the shareable log on the card (CardLog): the last preview line written, so a failure repeated per key press is logged once
     private String lastPreviewLog = "";
@@ -430,6 +438,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
     }
 
     private void writeAll(boolean confirmed) {
+        flushPreview();                                          // the live values must not land after the store write
         if (!confirmed && qualityChanges()) { openPrompt(P_QUALITY, 0); return; }
         if (!dirty()) { showToast(Lang.t("status_already_picked"), 2500); return; }
         int storedSub = storedSub();
@@ -1169,8 +1178,34 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
     }
 
     // ------------------------------------------------------------ live preview (runtime params)
+    /** the staged values onto the live preview — now, or once the wheel rests when it is being turned fast */
+    private void previewSoon() {
+        long now = SystemClock.uptimeMillis();
+        if (!previewPending) {
+            if (now - lastPreviewAt >= PREVIEW_GAP_MS) { applyPreview(); return; }
+            previewPending = true; pendingSince = now;
+        } else if (now - pendingSince >= PREVIEW_MAX_MS) { applyPreview(); return; }
+        handler.removeCallbacks(previewRun);
+        handler.postDelayed(previewRun, PREVIEW_GAP_MS);
+    }
+
+    /** a deferred preview applies now — before anything that reads or writes the camera's settings */
+    private void flushPreview() {
+        if (!previewPending) return;
+        boolean was = previewOk;
+        applyPreview();
+        if (was != previewOk) render();                          // the warning line follows the outcome
+    }
+
     private void applyPreview() {
+        handler.removeCallbacks(previewRun); previewPending = false;
         if (camera == null) return;
+        try {
+            applyPreviewNow();
+        } finally { lastPreviewAt = SystemClock.uptimeMillis(); }
+    }
+
+    private void applyPreviewNow() {
         try {
             Camera.Parameters p = camera.getParameters();
             Map<String, String> wanted = Params.preview(edit);
@@ -1194,6 +1229,17 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
         if (ms > 0) handler.postDelayed(hideToast, ms);
     }
 
+    /** setText relays the view out even for the same text, which is slow on the camera: only when it changed */
+    private static void setTextIf(TextView v, CharSequence s) {
+        CharSequence old = v.getText();
+        if (old == null || !s.toString().contentEquals(old)) v.setText(s);
+    }
+
+    private static void setColorIf(TextView v, int color) { if (v.getCurrentTextColor() != color) v.setTextColor(color); }
+
+    /** setBackgroundResource reloads the drawable every time: only when it is another one */
+    private static void setBgIf(View v, int[] has, int i, int res) { if (has[i] != res) { v.setBackgroundResource(res); has[i] = res; } }
+
     private void render() {
         Recipes.Recipe r = library.get(recipe);
         boolean dirty = dirty();
@@ -1205,23 +1251,23 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
         if (overlay == OV_BROWSER) { panel.setVisibility(View.GONE); mini.setVisibility(View.GONE); picker.set(recipe, browserCol, browserGroup, favs, library, cardDir != null); return; }
         if (panelUp(overlay)) {
             panel.setVisibility(View.VISIBLE); mini.setVisibility(View.GONE);
-            name.setText(Recipes.displayName(r));
-            name.setTextColor(row == 0 ? ACCENT : WHITE);
+            setTextIf(name, Recipes.displayName(r));
+            setColorIf(name, row == 0 ? ACCENT : WHITE);
             String original = Recipes.originalName(r);            // a translated name keeps the canonical one under it
-            nameOriginal.setText(original == null ? "" : original);
+            setTextIf(nameOriginal, original == null ? "" : original);
             nameOriginal.setVisibility(original == null ? View.GONE : View.VISIBLE);
-            count.setText(grp + "   " + pos);
-            tag.setText(Lang.t("tag_jpeg_only"));                    // a Picture Effect: the camera drops it under RAW
-            tag.setTextColor(ACCENT);
+            setTextIf(count, grp + "   " + pos);
+            setTextIf(tag, Lang.t("tag_jpeg_only"));                    // a Picture Effect: the camera drops it under RAW
+            setColorIf(tag, ACCENT);
             tag.setVisibility(edit[R_PE] != 0 ? View.VISIBLE : View.GONE);
             fav.setVisibility(favs.contains(recipe) ? View.VISIBLE : View.GONE);
             // two questions, two badges: does the camera have what you see (ACTIVE / PREVIEW), and is it the recipe as it was (EDITED)
-            if (dirty) { badge.setText(Lang.t("state_preview")); badge.setBackgroundResource(R.drawable.badge_warn); }
-            else { badge.setText(Lang.t("state_active")); badge.setBackgroundResource(R.drawable.badge_ok); }
-            editedBadge.setText(Lang.t("state_edited"));
+            if (dirty) { setTextIf(badge, Lang.t("state_preview")); setBgIf(badge, badgeBgRes, 0, R.drawable.badge_warn); }
+            else { setTextIf(badge, Lang.t("state_active")); setBgIf(badge, badgeBgRes, 0, R.drawable.badge_ok); }
+            setTextIf(editedBadge, Lang.t("state_edited"));
             editedBadge.setVisibility(edited() ? View.VISIBLE : View.GONE);
             String m = Params.metaLine(edit, previewOk ? null : previewErr);   // warnings only: the values are on the chips
-            meta.setText(m);
+            setTextIf(meta, m);
             meta.setVisibility(m.isEmpty() ? View.GONE : View.VISIBLE);
             int[] acts = actions();
             settleActions(acts.length);
@@ -1230,18 +1276,18 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
                 if (i >= acts.length) { actionBtn[i].setVisibility(View.GONE); continue; }
                 boolean on = onActions && i == actionSel;
                 actionBtn[i].setVisibility(View.VISIBLE);
-                actionBtn[i].setText(CustomRecipes.editLabel(acts[i]));
-                actionBtn[i].setBackgroundResource(on ? R.drawable.chip_sel : R.drawable.chip);
-                actionBtn[i].setTextColor(on ? INK : WHITE);
+                setTextIf(actionBtn[i], CustomRecipes.editLabel(acts[i]));
+                setBgIf(actionBtn[i], actionBgRes, i, on ? R.drawable.chip_sel : R.drawable.chip);
+                setColorIf(actionBtn[i], on ? INK : WHITE);
             }
             for (int i : ORDER) {
                 chip[i].setVisibility(rowVisible(i) ? View.VISIBLE : View.GONE);
                 boolean sel = i == row && !onActions, ch = rowDirty(i), foc = sel && focus;
-                chip[i].setBackgroundResource(foc ? R.drawable.chip_sel : sel ? R.drawable.chip_hi : R.drawable.chip);
-                chipLabel[i].setText(Params.rowName(i));
-                chipLabel[i].setTextColor(foc ? INK : sel ? ACCENT : DIM);
-                chipValue[i].setTextColor(foc ? INK : ch ? ACCENT : WHITE);
-                chipValue[i].setText(Params.fmt(i, edit[i], edit));
+                setBgIf(chip[i], chipBgRes, i, foc ? R.drawable.chip_sel : sel ? R.drawable.chip_hi : R.drawable.chip);
+                setTextIf(chipLabel[i], Params.rowName(i));
+                setColorIf(chipLabel[i], foc ? INK : sel ? ACCENT : DIM);
+                setColorIf(chipValue[i], foc ? INK : ch ? ACCENT : WHITE);
+                setTextIf(chipValue[i], Params.fmt(i, edit[i], edit));
             }
             if (row == 0) chipScroll.post(new Runnable() { public void run() { chipScroll.smoothScrollTo(0, 0); } });
             else {
@@ -1266,7 +1312,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
     private void stepValue(int dir) {
         if (row == 0) return;
         if (Params.step(edit, row, dir, recipeQuality(library.get(recipe)))) qualityChanged();
-        applyPreview(); render();
+        previewSoon(); render();
     }
 
     /** left / right on the edit buttons, wrapping */
@@ -1285,7 +1331,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
 
     /** the wheel, or left / right on the recipe line: the next recipe — after asking, when that would drop edits */
     private void nextRecipe(final int dir) {
-        unlessEditsLost(new Runnable() { public void run() { recipe = library.next(recipe, dir); showRecipe(); applyPreview(); render(); } });
+        unlessEditsLost(new Runnable() { public void run() { recipe = library.next(recipe, dir); showRecipe(); previewSoon(); render(); } });
     }
 
     /**
@@ -1295,7 +1341,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
     private void nextGroup(int dir) {
         browserGroup = Favourites.nextGroup(browserGroup, dir);
         int land = Favourites.landing(browserGroup, favs, library);
-        if (land >= 0) { recipe = land; showRecipe(); applyPreview(); }
+        if (land >= 0) { recipe = land; showRecipe(); previewSoon(); }
         if (browserGroup == Favourites.CUSTOM) reportSkipped();
         render();
     }
@@ -1313,7 +1359,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
     private void nextInGroup(int dir) {
         if (browserGroup == Favourites.CUSTOM) { int to = Favourites.nextCustom(recipe, dir, library); if (to < 0) return; recipe = to; }
         else recipe = browserGroup == Favourites.GROUP ? Favourites.next(favs, recipe, dir) : Recipes.nextInGroup(recipe, dir);
-        showRecipe(); applyPreview(); render();
+        showRecipe(); previewSoon(); render();
     }
 
     /** the recipe column is not reachable while the Favourites or Custom list is empty */
@@ -1381,8 +1427,8 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
                 swallowMenuUp = true; openBrowser(false); return true;
             case K_FN: openBrowser(false); return true;
             case K_DELETE: case K_SK2: armTrash(sc); return true;       // closes the list on the release; a hold asks to reset
-            case K_S1: try { camera.autoFocus(null); } catch (Throwable t) { logPreview("autofocus refused: " + t); } return true;
-            case K_S2: shootKey(); return true;
+            case K_S1: flushPreview(); try { camera.autoFocus(null); } catch (Throwable t) { logPreview("autofocus refused: " + t); } return true;
+            case K_S2: flushPreview(); shootKey(); return true;
         }
         return true;
     }
@@ -1458,8 +1504,8 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
             }
             case K_FN: browse(); return true;
             case K_DELETE: case K_SK2: armTrash(sc); return true;       // hides on the release; a hold asks to reset
-            case K_S1: try { camera.autoFocus(null); } catch (Throwable t) { logPreview("autofocus refused: " + t); } return true;
-            case K_S2: shootKey(); return true;
+            case K_S1: flushPreview(); try { camera.autoFocus(null); } catch (Throwable t) { logPreview("autofocus refused: " + t); } return true;
+            case K_S2: flushPreview(); shootKey(); return true;
             case K_MENU: case K_SK1:
                 if (focus) { swallowMenuUp = true; setFocus(false); return true; }
                 if (menuHoldArms(overlay, focus) && menuKeyHold.down(0) == Keys.Hold.ARM) handler.postDelayed(menuHold, HOLD_MS);
